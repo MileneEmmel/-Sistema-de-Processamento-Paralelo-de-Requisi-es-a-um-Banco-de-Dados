@@ -1,1 +1,1 @@
-# -Sistema-de-Processamento-Paralelo-de-Requisi-es-a-um-Banco-de-Dados
+# Sistema de Processamento Paralelo de Requisiçôes a um Banco de Dados
