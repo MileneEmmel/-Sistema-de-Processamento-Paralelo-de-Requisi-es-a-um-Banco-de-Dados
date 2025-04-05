@@ -1,1 +1,1 @@
-# Sistema de Processamento Paralelo de Requisiçôes a um Banco de Dados
+# Sistema de Processamento Paralelo de Requisições a um Banco de Dados
