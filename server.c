@@ -92,17 +92,18 @@ int main() {
     int sockfd, len;
     struct sockaddr_un local, remote;
 
+    // Create socket
     sockfd = socket(AF_UNIX, SOCK_STREAM, 0);
     if (sockfd < 0) {
         perror("Erro ao criar socket");
         return 1;
     }
 
+    // Bind socket to local address
     memset(&local, 0, sizeof(local));
     local.sun_family = AF_UNIX;
     strncpy(local.sun_path, SOCK_PATH, sizeof(local.sun_path) - 1);
     unlink(SOCK_PATH);
-
     len = strlen(local.sun_path) + sizeof(local.sun_family);
     if (bind(sockfd, (struct sockaddr *)&local, len) < 0) {
         perror("Erro ao associar socket");
@@ -110,6 +111,7 @@ int main() {
         return 1;
     }
 
+    // Listen for connections
     if (listen(sockfd, 5) < 0) {
         perror("Erro ao escutar");
         close(sockfd);
