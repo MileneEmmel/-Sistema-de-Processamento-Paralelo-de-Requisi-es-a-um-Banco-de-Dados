@@ -6,7 +6,6 @@
 #include <sys/un.h>
 #include <unistd.h>
 #include <pthread.h>
-#include <ctype.h>
 #include "banco.h"
 
 #define SOCK_PATH "/tmp/unix_socket"
@@ -21,8 +20,9 @@ void *atender_cliente(void *arg) {
 
     while (1) {
         ssize_t bytes = read(clientfd, buffer, sizeof(buffer));
+        buffer[bytes] = '\0';
         if (bytes <= 0) {
-            printf("Cliente desconectado ou erro na leitura.\n");
+            printf("Cliente desconectado ou erro na leitura...\n");
             close(clientfd);
             pthread_exit(NULL);
         }
@@ -36,10 +36,12 @@ void *atender_cliente(void *arg) {
                     registros[i].id = id++;
                     strcpy(registros[i].nome, nome);
                     printf("Inserção realizada: Nome: %s, ID: %d\n", nome, registros[i].id);
+                    strcpy(buffer, "Registro inserido com sucesso...");
                     break;
                 }
                 if (i == 99) {
-                    printf("Banco cheio!\n");
+                    printf("Banco de registros cheio...\n");
+                    strcpy(buffer, "Banco de registros cheio...");
                 }
             }
         }
@@ -49,44 +51,37 @@ void *atender_cliente(void *arg) {
                 if (strcmp(registros[i].nome, nome) == 0) {
                     registros[i].id = -1;
                     registros[i].nome[0] = '\0';
-                    printf("Remoção realizada: %s\n", nome);
+                    printf("Remoção realizada com sucesso... %s\n", nome);
+                    strcpy(buffer, "Remoção realizada com sucesso...");
                     break;
                 }
                 if (i == 99) {
-                    printf("Nome não encontrado.\n");
+                    printf("Nome não encontrado...\n");
+                    strcpy(buffer, "Nome não encontrado...");
                 }
             }
         }
         else {
-            printf("Operação não reconhecida.\n");
+            printf("Operação não reconhecida...\n");
+            strcpy(buffer, "Operação não reconhecida...");
         }
 
-        // enviar resposta em maiúsculas
-        for (int i = 0; i < strlen(buffer); i++)
-            buffer[i] = toupper(buffer[i]);
-
         if (write(clientfd, buffer, strlen(buffer) + 1) < 0) {
-            perror("Erro ao enviar resposta");
+            perror("Erro ao enviar resposta...");
             close(clientfd);
             pthread_exit(NULL);
         }
 
-        printf("Resposta enviada ao cliente.\n");
+        printf("Resposta enviada ao cliente...\n");
 
-        // printar banco
-        printf("Estado atual do banco:\n");
-        for (int i = 0; i < 100; i++) {
-            if (registros[i].id != -1) {
-                printf("ID: %d, Nome: %s\n", registros[i].id, registros[i].nome);
-            }
-        }
+        imprimir(registros, 100);
     }
 }
 
 int main() {
     // Inicializa banco
     if (inicializar(registros, 100)) {
-        printf("Banco inicializado com sucesso!\n");
+        printf("Banco inicializado com sucesso...\n");
     }
 
     int sockfd, len;
@@ -95,7 +90,7 @@ int main() {
     // Create socket
     sockfd = socket(AF_UNIX, SOCK_STREAM, 0);
     if (sockfd < 0) {
-        perror("Erro ao criar socket");
+        perror("Erro ao criar socket...");
         return 1;
     }
 
@@ -106,14 +101,14 @@ int main() {
     unlink(SOCK_PATH);
     len = strlen(local.sun_path) + sizeof(local.sun_family);
     if (bind(sockfd, (struct sockaddr *)&local, len) < 0) {
-        perror("Erro ao associar socket");
+        perror("Erro ao associar socket...");
         close(sockfd);
         return 1;
     }
 
     // Listen for connections
     if (listen(sockfd, 5) < 0) {
-        perror("Erro ao escutar");
+        perror("Erro ao escutar...");
         close(sockfd);
         return 1;
     }
@@ -125,12 +120,12 @@ int main() {
         int *newsockfd = malloc(sizeof(int));
         *newsockfd = accept(sockfd, (struct sockaddr *)&remote, (socklen_t *)&client_len);
         if (*newsockfd < 0) {
-            perror("Erro ao aceitar conexão");
+            perror("Erro ao aceitar conexão...");
             free(newsockfd);
             continue;
         }
 
-        printf("Novo cliente conectado.\n");
+        printf("Novo cliente conectado...\n");
 
         pthread_t tid;
         pthread_create(&tid, NULL, atender_cliente, newsockfd);

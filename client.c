@@ -4,7 +4,6 @@
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <unistd.h>
-#include "banco.h"
 
 #define SOCK_PATH "/tmp/unix_socket"
 
@@ -16,7 +15,7 @@ int main() {
     // Create socket
     sockfd = socket(AF_UNIX, SOCK_STREAM, 0);
     if (sockfd < 0) {
-        perror("Falha em criar o socket");
+        perror("Falha em criar o socket...");
         return 1;
     }
 
@@ -26,12 +25,12 @@ int main() {
     strncpy(remote.sun_path, SOCK_PATH, sizeof(remote.sun_path) - 1);
     len = strlen(remote.sun_path) + sizeof(remote.sun_family);
     if (connect(sockfd, (struct sockaddr *)&remote, len) < 0) {
-        perror("Falha em conectar no servidor");
+        perror("Falha em conectar no servidor...");
         close(sockfd);
         return 1;
     }
 
-    printf("Conectado ao servidor!\n");
+    printf("Conectado ao servidor...\n");
 
     while (1) {
         // Send data to server
@@ -49,12 +48,12 @@ int main() {
         }
 
         if (write(sockfd, buffer, strlen(buffer) + 1) < 0) {
-            perror("Falha em escrever no socket");
+            perror("Falha em escrever no socket...");
             close(sockfd);
             return 1;
         }
 
-        printf("Operação enviada ao servidor.\n");
+        printf("Operação enviada ao servidor...\n");
 
         // Read data from server
         if (read(sockfd, buffer, sizeof(buffer)) < 0) {

@@ -15,3 +15,12 @@ bool inicializar(Registro registros[], int tamanho) {
     }
     return true;
 }
+
+void imprimir(Registro registros[], int tamanho) {
+    printf("Estado atual do banco de registros:\n");
+    for (int i = 0; i < 100; i++) {
+        if (registros[i].id != -1) {
+            printf("ID: %d, Nome: %s\n", registros[i].id, registros[i].nome);
+        }
+    }
+}
