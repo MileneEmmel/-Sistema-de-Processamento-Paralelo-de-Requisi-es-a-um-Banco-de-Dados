@@ -1,4 +1,4 @@
-  Sistema de Processamento Paralelo de Requisições a um Banco de Dados
+ # Sistema de Processamento Paralelo de Requisições a um Banco de Dados
 
 Este projeto simula um sistema gerenciador de requisições a um banco de dados utilizando múltiplos processos e threads, com comunicação via IPC (UNIX Domain Socket) e controle de concorrência com mutex.
 
