@@ -1,137 +1,330 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
+#include <pthread.h>
+#include <signal.h>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <sys/un.h>
-#include <unistd.h>
-#include <pthread.h>
+#include <time.h>
+#include <sys/time.h>
 #include "banco.h"
 
-#define SOCK_PATH "/tmp/unix_socket"
+#define SOCK_PATH "/tmp/pipe"
+#define MAX_TAREFAS 256
+#define NUM_REGISTROS 1000
+#define NUM_THREADS 4
+#define ARQUILO_LOG "server.log"
+#define TAM_MENSAGEM 256
+#define TAM_LOG 256
 
-int id = 0;
-Registro registros[100];
+pthread_mutex_t mutexFila  = PTHREAD_MUTEX_INITIALIZER;
+pthread_cond_t  condFila   = PTHREAD_COND_INITIALIZER;
+pthread_mutex_t mutexLog   = PTHREAD_MUTEX_INITIALIZER;
+pthread_mutex_t mutexBanco = PTHREAD_MUTEX_INITIALIZER;
 
-void *atender_cliente(void *arg) {
-    int clientfd = *((int *)arg);
-    free(arg);
-    char buffer[1024];
+typedef enum { 
+    OP_INSERT,
+    OP_DELETE,
+    OP_SELECT,
+    OP_UPDATE
+} TipoOp;
 
-    while (1) {
-        ssize_t bytes = read(clientfd, buffer, sizeof(buffer));
-        buffer[bytes] = '\0';
-        if (bytes <= 0) {
-            printf("Cliente desconectado ou erro na leitura...\n");
-            close(clientfd);
-            pthread_exit(NULL);
-        }
+typedef struct {
+    int clientfd;
+    TipoOp op;
+    char mensagem[TAM_MENSAGEM];
+} BlocoTarefa;
 
-        printf("Operação recebida: %s\n", buffer);
+int status = 1; 
+int socket_servidor_global = -1; 
 
-        if (strncmp(buffer, "INSERT ", 7) == 0) {
-            char *nome = buffer + 7;
-            for (int i = 0; i < 100; i++) {
-                if (registros[i].id == -1) {
-                    registros[i].id = id++;
-                    strcpy(registros[i].nome, nome);
-                    printf("Inserção realizada: Nome: %s, ID: %d\n", nome, registros[i].id);
-                    strcpy(buffer, "Registro inserido com sucesso...");
-                    break;
-                }
-                if (i == 99) {
-                    printf("Banco de registros cheio...\n");
-                    strcpy(buffer, "Banco de registros cheio...");
-                }
-            }
-        }
-        else if (strncmp(buffer, "DELETE ", 7) == 0) {
-            char *nome = buffer + 7;
-            for (int i = 0; i < 100; i++) {
-                if (strcmp(registros[i].nome, nome) == 0) {
-                    registros[i].id = -1;
-                    registros[i].nome[0] = '\0';
-                    printf("Remoção realizada com sucesso... %s\n", nome);
-                    strcpy(buffer, "Remoção realizada com sucesso...");
-                    break;
-                }
-                if (i == 99) {
-                    printf("Nome não encontrado...\n");
-                    strcpy(buffer, "Nome não encontrado...");
-                }
-            }
-        }
-        else {
-            printf("Operação não reconhecida...\n");
-            strcpy(buffer, "Operação não reconhecida...");
-        }
+int contadorID = 0;
+Registro registros[NUM_REGISTROS];
+BlocoTarefa filaTarefas[MAX_TAREFAS];
+int contadorTarefas = 0;
+FILE *arquivoLog;
 
-        if (write(clientfd, buffer, strlen(buffer) + 1) < 0) {
-            perror("Erro ao enviar resposta...");
-            close(clientfd);
-            pthread_exit(NULL);
-        }
+void eventoLog(const char *evento) {
+    pthread_mutex_lock(&mutexLog);
 
-        printf("Resposta enviada ao cliente...\n");
+    struct timeval tv;
+    gettimeofday(&tv, NULL);                
+    time_t sec = tv.tv_sec;                  
+    struct tm *tm_info = localtime(&sec);    
 
-        imprimir(registros, 100);
-    }
+    char buffer[TAM_LOG];
+    strftime(buffer, sizeof(buffer), "%Y-%m-%d %H:%M:%S", tm_info);
+
+    fprintf(arquivoLog, "[%s.%03ld] %s\n",
+            buffer,
+            (long)(tv.tv_usec / 1000),  
+            evento);
+
+    fflush(arquivoLog);
+    pthread_mutex_unlock(&mutexLog);
 }
 
-int main() {
-    // Inicializa banco
-    if (inicializar(registros, 100)) {
-        printf("Banco inicializado com sucesso...\n");
+void enfileirarTarefa(BlocoTarefa tarefa) {
+    pthread_mutex_lock(&mutexFila);
+
+    if (contadorTarefas < MAX_TAREFAS) {
+        filaTarefas[contadorTarefas++] = tarefa;
+
+        char mensagemLog[128];
+        snprintf(mensagemLog, sizeof(mensagemLog), "Tarefa entrou na fila. Posição atual: %d", contadorTarefas);
+        eventoLog(mensagemLog);
+
+        pthread_cond_signal(&condFila);
+    } else {
+        write(tarefa.clientfd, "Fila de tarefas cheia. Tente novamente.", 45);
+        eventoLog("Fila de tarefas cheia. Solicitação ignorada.");
     }
 
-    int sockfd, len;
-    struct sockaddr_un local, remote;
+    pthread_mutex_unlock(&mutexFila);
+}
 
-    // Create socket
-    sockfd = socket(AF_UNIX, SOCK_STREAM, 0);
-    if (sockfd < 0) {
-        perror("Erro ao criar socket...");
-        return 1;
+
+void executarTarefa(const BlocoTarefa *tarefa, int thread_id) {
+    char resposta[TAM_MENSAGEM] = {0};
+    char log_msg[TAM_LOG];
+
+    snprintf(log_msg, sizeof(log_msg),
+         "[Thread %d] Iniciando tarefa: Operação %d | Dados: %.200s",
+         thread_id, tarefa->op, tarefa->mensagem);
+
+    eventoLog(log_msg);
+
+    if (tarefa->op == OP_INSERT) {
+        bool inserido = false;
+        //usleep(300000);  // Delay para evidenciar o paralelismo (0.3 seg)
+        pthread_mutex_lock(&mutexBanco);
+        for (int i = 0; i < NUM_REGISTROS; i++) {
+            if (registros[i].id == -1) { 
+                registros[i].id = contadorID++;
+                strncpy(registros[i].nome, tarefa->mensagem, sizeof(registros[i].nome)-1);
+                snprintf(resposta, sizeof(resposta), "Inserção: %s => ID %d", registros[i].nome, registros[i].id);
+                inserido = true;
+                break;
+            }
+        }
+        if (!inserido) {
+            snprintf(resposta, sizeof(resposta), "Erro ao inserir. Banco de dados cheio.");
+        }
+        pthread_mutex_unlock(&mutexBanco);
     }
-
-    // Bind socket to local address
-    memset(&local, 0, sizeof(local));
-    local.sun_family = AF_UNIX;
-    strncpy(local.sun_path, SOCK_PATH, sizeof(local.sun_path) - 1);
-    unlink(SOCK_PATH);
-    len = strlen(local.sun_path) + sizeof(local.sun_family);
-    if (bind(sockfd, (struct sockaddr *)&local, len) < 0) {
-        perror("Erro ao associar socket...");
-        close(sockfd);
-        return 1;
+    else if (tarefa->op == OP_DELETE) {
+        int id = atoi(tarefa->mensagem);
+        bool removido = false;
+        pthread_mutex_lock(&mutexBanco);
+        for (int i = 0; i < NUM_REGISTROS; i++) {
+            if (registros[i].id == id) {
+                registros[i].id = -1;
+                registros[i].nome[0] = '\0';
+                snprintf(resposta, sizeof(resposta), "Remoção: ID %d", id);
+                removido = true;
+                break;
+            }
+        }
+        if (!removido) {
+            snprintf(resposta, sizeof(resposta), "Erro ao remover. ID %d não encontrado.", id);
+        }
+        pthread_mutex_unlock(&mutexBanco);
     }
-
-    // Listen for connections
-    if (listen(sockfd, 5) < 0) {
-        perror("Erro ao escutar...");
-        close(sockfd);
-        return 1;
+    else if (tarefa->op == OP_SELECT) {
+        int id = atoi(tarefa->mensagem);
+        bool encontrado = false;
+        pthread_mutex_lock(&mutexBanco);
+        for (int i = 0; i < NUM_REGISTROS; i++) {
+            if (registros[i].id == id) {
+                snprintf(resposta, sizeof(resposta), "Consulta: ID %d => Nome: %s", id, registros[i].nome);
+                encontrado = true;
+                break;
+            }
+        }
+        if (!encontrado) {
+            snprintf(resposta, sizeof(resposta), "Erro ao consultar. ID %d não encontrado.", id);
+        }
+        pthread_mutex_unlock(&mutexBanco);
     }
+    else if (tarefa->op == OP_UPDATE) {
+        int id;
+        char novoNome[100];
+    
+        if (sscanf(tarefa->mensagem, "%d %[^\n]", &id, novoNome) != 2) {
+            snprintf(resposta, sizeof(resposta), "Formato inválido. Use: UPDATE <id> <novo_nome>");
+        } else {
+            bool atualizado = false;
+            pthread_mutex_lock(&mutexBanco);
+            for (int i = 0; i < NUM_REGISTROS; i++) {
+                if (registros[i].id == id) {
+                    strncpy(registros[i].nome, novoNome, sizeof(registros[i].nome)-1);
+                    snprintf(resposta, sizeof(resposta), "Atualização: ID %d => Novo nome: %s", id, registros[i].nome);
+                    atualizado = true;
+                    break;
+                }
+            }
+            if (!atualizado) {
+                snprintf(resposta, sizeof(resposta), "Erro ao atualizar. ID %d não encontrado.", id);
+            }
+            pthread_mutex_unlock(&mutexBanco);
+        }
+    }
+    
+    if (write(tarefa->clientfd, resposta, strlen(resposta)+1) < 0) {
+        // Se ocorrer erro na escrita, registra no log.
+        eventoLog("Erro no write da resposta.");
+    }
+    
+    snprintf(log_msg, sizeof(log_msg),
+         "[Thread %d] Fim da tarefa executada. Resposta enviada ao cliente.",
+         thread_id);
 
-    printf("Servidor ouvindo em %s...\n", SOCK_PATH);
+    eventoLog(log_msg);
+    
+    imprimirRegistros(registros, NUM_REGISTROS);
+}
+
+/*
+   A função th_executarTarefa recebe um identificador (thread_id) passado como argumento
+   e o repassa para executarTarefa().
+*/
+void *th_executarTarefa(void *arg) {
+    int thread_id = *((int*) arg);
+    free(arg);  // Libera a memória alocada para o ID da thread
 
     while (1) {
-        int client_len = sizeof(remote);
-        int *newsockfd = malloc(sizeof(int));
-        *newsockfd = accept(sockfd, (struct sockaddr *)&remote, (socklen_t *)&client_len);
-        if (*newsockfd < 0) {
-            perror("Erro ao aceitar conexão...");
-            free(newsockfd);
+        pthread_mutex_lock(&mutexFila);
+        while (contadorTarefas == 0) {
+            pthread_cond_wait(&condFila, &mutexFila);
+        }
+        BlocoTarefa tarefa = filaTarefas[0];
+        memmove(&filaTarefas[0], &filaTarefas[1], sizeof(BlocoTarefa) * (--contadorTarefas));
+        pthread_mutex_unlock(&mutexFila);
+
+        executarTarefa(&tarefa, thread_id);
+    }
+    return NULL;
+}
+
+void* th_atenderCliente(void *arg) {
+    int clientfd = *(int*)arg;
+    free(arg);
+
+    char buffer[TAM_MENSAGEM];
+    while (1) {
+        ssize_t n = read(clientfd, buffer, sizeof(buffer)-1);
+        if (n <= 0) break;
+        buffer[n] = '\0';
+
+        if (strcasecmp(buffer, "SAIR") == 0) {
+            write(clientfd, "Tchau!", 50);
+            break;
+        }
+
+        char comando[6], argumento[TAM_MENSAGEM];
+        if (sscanf(buffer, "%15s %255[^\n]", comando, argumento) != 2) {
+            write(clientfd, "Formato inválido.", 17);
             continue;
         }
 
-        printf("Novo cliente conectado...\n");
+        BlocoTarefa tarefa;
+        tarefa.clientfd = clientfd;
+        strncpy(tarefa.mensagem, argumento, sizeof(tarefa.mensagem)-1);
 
-        pthread_t tid;
-        pthread_create(&tid, NULL, atender_cliente, newsockfd);
-        pthread_detach(tid);
+        if (strcasecmp(comando, "INSERT") == 0) {
+            tarefa.op = OP_INSERT;
+        } else if (strcasecmp(comando, "DELETE") == 0) {
+            tarefa.op = OP_DELETE;
+        } else if (strcasecmp(comando, "SELECT") == 0) { 
+            tarefa.op = OP_SELECT;
+        } else if (strcasecmp(comando, "UPDATE") == 0) {
+            tarefa.op = OP_UPDATE;
+        } else {
+            write(clientfd, "Operação desconhecida.", 23);
+            continue;
+        }
+        enfileirarTarefa(tarefa);
     }
 
-    close(sockfd);
+    close(clientfd);
+    return NULL;
+}
+
+void* th_comandos(void* arg) {
+    char comando[100];
+    while (fgets(comando, sizeof(comando), stdin)) {
+        if (strncmp(comando, "SHUTDOWN", 8) == 0) {
+            eventoLog("Comando SHUTDOWN recebido. Encerrando o servidor...");
+            status = 0;
+            if (socket_servidor_global != -1) {
+                shutdown(socket_servidor_global, SHUT_RDWR);
+                close(socket_servidor_global);
+            }
+            break;
+        } else if (strncmp(comando, "PRINT", 5) == 0) {
+            eventoLog("Comando PRINT recebido.");
+            imprimirRegistros(registros, NUM_REGISTROS);
+        }
+    }
+    return NULL;
+}
+
+int main(void) {
+    if (!(arquivoLog = fopen(ARQUILO_LOG, "a"))) {
+        exit(1);
+    }
+
+    printf("Servidor inicializando...\n");
+    eventoLog("Servidor inicializando...");
+    inicializarRegistros(registros, NUM_REGISTROS);
+    carregarRegistros(registros, NUM_REGISTROS, &contadorID);
+
+    // Criação do pool de threads com IDs enumerados
+    pthread_t pool[NUM_THREADS];
+    for (int i = 0; i < NUM_THREADS; i++) {
+        int *thread_id = malloc(sizeof(int));
+        if (thread_id == NULL) {
+            exit(1);
+        }
+        *thread_id = i;
+        pthread_create(&pool[i], NULL, th_executarTarefa, thread_id);
+        pthread_detach(pool[i]);
+    }
+
+    unlink(SOCK_PATH);
+    int sockfd = socket(AF_UNIX, SOCK_STREAM, 0);
+    socket_servidor_global = sockfd;
+
+    struct sockaddr_un addr = { .sun_family = AF_UNIX };
+    strncpy(addr.sun_path, SOCK_PATH, sizeof(addr.sun_path)-1);
+    if (bind(sockfd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
+        exit(1);
+    }
+    listen(sockfd, 5);
+    eventoLog("Servidor pronto, aguardando clientes...");
+
+    pthread_t thread_comandos;
+    pthread_create(&thread_comandos, NULL, th_comandos, NULL);
+    while (status) {
+        int *pclient = malloc(sizeof(int));
+        *pclient = accept(sockfd, NULL, NULL);
+
+        if (!status || *pclient < 0) {
+            free(pclient);
+            break;
+        }
+
+        eventoLog("Cliente conectado.");
+        pthread_t tid;
+        pthread_create(&tid, NULL, th_atenderCliente, pclient);
+        pthread_detach(tid);
+    }
+    pthread_join(thread_comandos, NULL);
+    salvarRegistros(registros, NUM_REGISTROS);
+    eventoLog("Servidor encerrado.");
+    fclose(arquivoLog);
+    unlink(SOCK_PATH);
     return 0;
 }

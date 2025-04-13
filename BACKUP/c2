@@ -1,0 +1,49 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/socket.h>
+#include <sys/un.h>
+#include <unistd.h>
+
+#define SOCK_PATH "/tmp/pipe"
+
+int main() {
+    int sockfd = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (sockfd < 0) { perror("socket"); return 1; }
+
+    struct sockaddr_un remote = { .sun_family = AF_UNIX };
+    strncpy(remote.sun_path, SOCK_PATH, sizeof(remote.sun_path)-1);
+    if (connect(sockfd, (struct sockaddr *)&remote, sizeof(remote)) < 0) {
+        perror("connect"); return 1;
+    }
+
+    printf("Conectado ao servidor.\n");
+    char buffer[256];
+    while (1) {
+        printf("1-Inserir  2-Remover  3-Sair > ");
+        if (!fgets(buffer, sizeof(buffer), stdin)) break;
+        buffer[strcspn(buffer, "\n")] = '\0';
+        if (strcmp(buffer, "3") == 0) {
+            write(sockfd, "SAIR", 5);
+            read(sockfd, buffer, sizeof(buffer));
+            printf("%s\n", buffer);
+            break;
+        }
+        int op = atoi(buffer);
+        if (op!=1 && op!=2) { printf("Opcao inválida.\n"); continue; }
+        printf(op==1 ? "Nome: " : "ID: ");
+        if (!fgets(buffer, sizeof(buffer), stdin)) break;
+        buffer[strcspn(buffer, "\n")] = '\0';
+        char msg[300];
+        if (op == 1) {
+            snprintf(msg, sizeof(msg), "INSERT %s", buffer);
+        } else if (op == 2) {
+            snprintf(msg, sizeof(msg), "DELETE %s", buffer);
+        }
+        write(sockfd, msg, strlen(msg)+1);
+        if (read(sockfd, buffer, sizeof(buffer))>0)
+            printf("Resposta: %s\n", buffer);
+    }
+    close(sockfd);
+    return 0;
+}
