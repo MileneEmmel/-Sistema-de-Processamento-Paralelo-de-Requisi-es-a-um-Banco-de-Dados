@@ -13,7 +13,7 @@
 
 #define SOCK_PATH "/tmp/pipe"
 #define MAX_TAREFAS 256
-#define NUM_REGISTROS 1000
+#define NUM_REGISTROS 15000
 #define NUM_THREADS 4
 #define ARQUILO_LOG "server.log"
 #define TAM_MENSAGEM 256
@@ -98,7 +98,7 @@ void executarTarefa(const BlocoTarefa *tarefa, int thread_id) {
 
     if (tarefa->op == OP_INSERT) {
         bool inserido = false;
-        //usleep(300000);  // Delay para evidenciar o paralelismo (0.3 seg)
+        usleep(300000);  // Delay para evidenciar o paralelismo (0.3 seg)
         pthread_mutex_lock(&mutexBanco);
         for (int i = 0; i < NUM_REGISTROS; i++) {
             if (registros[i].id == -1) { 
