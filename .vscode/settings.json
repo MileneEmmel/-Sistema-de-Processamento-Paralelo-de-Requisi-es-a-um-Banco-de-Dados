@@ -4,6 +4,13 @@
         "stdio.h": "c",
         "types.h": "c",
         "unistd.h": "c",
-        "pthread.h": "c"
+        "pthread.h": "c",
+        "string.h": "c",
+        "stdlib.h": "c",
+        "socket.h": "c",
+        "time.h": "c",
+        "stdbool.h": "c",
+        "un.h": "c",
+        "s": "c"
     }
 }
