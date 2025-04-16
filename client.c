@@ -20,7 +20,7 @@ int main() {
     printf("Conectado ao servidor.\n");
 
     char buffer[256];
-    char msg[256];
+    char msg[300];
 
     while (1) {
         printf("1-Inserir  2-Remover  3-Consultar  4-Atualizar  5-Sair > ");

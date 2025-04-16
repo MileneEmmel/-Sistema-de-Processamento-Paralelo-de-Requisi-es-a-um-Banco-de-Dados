@@ -245,16 +245,24 @@ void* th_atenderCliente(void *arg) {
 
 void* th_comandos(void* arg) {
     char comando[100];
+    
     while (fgets(comando, sizeof(comando), stdin)) {
-        if (strcasecmp(comando, "SHUTDOWN") == 0) {
+        comando[strcspn(comando, "\n")] = '\0';
+        if (strncmp(comando, "SHUTDOWN", 8) == 0) {
             eventoLog("Comando SHUTDOWN recebido. Encerrando o servidor...");
             status = 0;
             if (socket_servidor_global != -1) {
                 shutdown(socket_servidor_global, SHUT_RDWR);
                 close(socket_servidor_global);
+                salvarRegistros(registros, NUM_REGISTROS);
+                eventoLog("Servidor encerrado.");
+                fclose(arquivoLog);
+                unlink(SOCK_PATH);
+               
+                exit(0);
             }
             break;
-        } else if (strcasecmp(comando, "PRINT") == 0) {
+        } else if (strncmp(comando, "PRINT", 5) == 0) {
             eventoLog("Comando PRINT recebido.");
             imprimirRegistros(registros, NUM_REGISTROS);
         }
@@ -287,6 +295,7 @@ int main(void) {
     unlink(SOCK_PATH);
     int sockfd = socket(AF_UNIX, SOCK_STREAM, 0);
     socket_servidor_global = sockfd;
+
 
     struct sockaddr_un addr = { .sun_family = AF_UNIX };
     strncpy(addr.sun_path, SOCK_PATH, sizeof(addr.sun_path)-1);
