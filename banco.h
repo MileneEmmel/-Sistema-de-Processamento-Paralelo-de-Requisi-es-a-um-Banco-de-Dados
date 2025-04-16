@@ -24,6 +24,7 @@ void carregarRegistros(Registro registros[], int tam, int *contadorID) {
                 *contadorID = registros[i].id;
             } 
         }
+        i++;
     }
     (*contadorID)++;
     fclose(arquivo);

@@ -323,14 +323,5 @@ int main(void) {
         pthread_detach(tid);
     }
     
-    pthread_join(thread_comandos, NULL);
-    salvarRegistros(registros, NUM_REGISTROS);
-    eventoLog("Servidor encerrado.");
-    fclose(arquivoLog);
-    unlink(SOCK_PATH);
-    pthread_mutex_destroy(&mutexFila);
-    pthread_cond_destroy(&condFila);
-    pthread_mutex_destroy(&mutexLog);
-    pthread_mutex_destroy(&mutexBanco);
     return 0;
 }
