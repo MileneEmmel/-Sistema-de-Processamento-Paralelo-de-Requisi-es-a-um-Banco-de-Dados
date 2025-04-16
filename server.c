@@ -13,7 +13,7 @@
 
 #define SOCK_PATH "/tmp/pipe"
 #define MAX_TAREFAS 256
-#define NUM_REGISTROS 15000
+#define NUM_REGISTROS 1000
 #define NUM_THREADS 4
 #define ARQUILO_LOG "server.log"
 #define TAM_MENSAGEM 256
@@ -53,15 +53,9 @@ void eventoLog(const char *evento) {
     gettimeofday(&tv, NULL);                
     time_t sec = tv.tv_sec;                  
     struct tm *tm_info = localtime(&sec);    
-
     char buffer[TAM_LOG];
     strftime(buffer, sizeof(buffer), "%Y-%m-%d %H:%M:%S", tm_info);
-
-    fprintf(arquivoLog, "[%s.%03ld] %s\n",
-            buffer,
-            (long)(tv.tv_usec / 1000),  
-            evento);
-
+    fprintf(arquivoLog, "[%s.%03ld] %s\n", buffer, (long)(tv.tv_usec / 1000), evento);
     fflush(arquivoLog);
     pthread_mutex_unlock(&mutexLog);
 }
@@ -78,27 +72,23 @@ void enfileirarTarefa(BlocoTarefa tarefa) {
 
         pthread_cond_signal(&condFila);
     } else {
-        write(tarefa.clientfd, "Fila de tarefas cheia. Tente novamente.", 45);
+        write(tarefa.clientfd, "Fila de tarefas cheia. Tente novamente.", 40);
         eventoLog("Fila de tarefas cheia. Solicitação ignorada.");
     }
 
     pthread_mutex_unlock(&mutexFila);
 }
 
-
 void executarTarefa(const BlocoTarefa *tarefa, int thread_id) {
     char resposta[TAM_MENSAGEM] = {0};
     char log_msg[TAM_LOG];
 
-    snprintf(log_msg, sizeof(log_msg),
-         "[Thread %d] Iniciando tarefa: Operação %d | Dados: %.200s",
-         thread_id, tarefa->op, tarefa->mensagem);
-
+    snprintf(log_msg, sizeof(log_msg), "[Thread %d] Iniciando tarefa: Operação %d | Dados: %.200s", thread_id, tarefa->op, tarefa->mensagem);
     eventoLog(log_msg);
 
     if (tarefa->op == OP_INSERT) {
         bool inserido = false;
-        usleep(300000);  // Delay para evidenciar o paralelismo (0.3 seg)
+        //usleep(300000);  // Delay para evidenciar o paralelismo (0.3 seg)
         pthread_mutex_lock(&mutexBanco);
         for (int i = 0; i < NUM_REGISTROS; i++) {
             if (registros[i].id == -1) { 
@@ -177,30 +167,28 @@ void executarTarefa(const BlocoTarefa *tarefa, int thread_id) {
         eventoLog("Erro no write da resposta.");
     }
     
-    snprintf(log_msg, sizeof(log_msg),
-         "[Thread %d] Fim da tarefa executada. Resposta enviada ao cliente.",
-         thread_id);
-
+    snprintf(log_msg, sizeof(log_msg), "[Thread %d] Fim da tarefa executada. Resposta enviada ao cliente.", thread_id);
     eventoLog(log_msg);
     
-    imprimirRegistros(registros, NUM_REGISTROS);
+    //imprimirRegistros(registros, NUM_REGISTROS);
 }
 
-/*
-   A função th_executarTarefa recebe um identificador (thread_id) passado como argumento
-   e o repassa para executarTarefa().
-*/
 void *th_executarTarefa(void *arg) {
     int thread_id = *((int*) arg);
-    free(arg);  // Libera a memória alocada para o ID da thread
+    free(arg); 
 
     while (1) {
         pthread_mutex_lock(&mutexFila);
         while (contadorTarefas == 0) {
             pthread_cond_wait(&condFila, &mutexFila);
         }
+        
         BlocoTarefa tarefa = filaTarefas[0];
-        memmove(&filaTarefas[0], &filaTarefas[1], sizeof(BlocoTarefa) * (--contadorTarefas));
+        for (int i = 1; i < contadorTarefas; i++) {
+            filaTarefas[i - 1] = filaTarefas[i];
+        }
+        contadorTarefas--;
+
         pthread_mutex_unlock(&mutexFila);
 
         executarTarefa(&tarefa, thread_id);
@@ -214,16 +202,19 @@ void* th_atenderCliente(void *arg) {
 
     char buffer[TAM_MENSAGEM];
     while (1) {
-        ssize_t n = read(clientfd, buffer, sizeof(buffer)-1);
-        if (n <= 0) break;
-        buffer[n] = '\0';
+        int bytes_lidos = read(clientfd, buffer, TAM_MENSAGEM - 1);
+        if (bytes_lidos <= 0) {
+            break;
+        }
+        buffer[bytes_lidos] = '\0';
 
         if (strcasecmp(buffer, "SAIR") == 0) {
-            write(clientfd, "Tchau!", 50);
+            write(clientfd, "Tchau!", 7);
+            eventoLog("Cliente desconectado.");
             break;
         }
 
-        char comando[6], argumento[TAM_MENSAGEM];
+        char comando[16], argumento[TAM_MENSAGEM];
         if (sscanf(buffer, "%15s %255[^\n]", comando, argumento) != 2) {
             write(clientfd, "Formato inválido.", 17);
             continue;
@@ -255,7 +246,7 @@ void* th_atenderCliente(void *arg) {
 void* th_comandos(void* arg) {
     char comando[100];
     while (fgets(comando, sizeof(comando), stdin)) {
-        if (strncmp(comando, "SHUTDOWN", 8) == 0) {
+        if (strcasecmp(comando, "SHUTDOWN") == 0) {
             eventoLog("Comando SHUTDOWN recebido. Encerrando o servidor...");
             status = 0;
             if (socket_servidor_global != -1) {
@@ -263,7 +254,7 @@ void* th_comandos(void* arg) {
                 close(socket_servidor_global);
             }
             break;
-        } else if (strncmp(comando, "PRINT", 5) == 0) {
+        } else if (strcasecmp(comando, "PRINT") == 0) {
             eventoLog("Comando PRINT recebido.");
             imprimirRegistros(registros, NUM_REGISTROS);
         }
@@ -307,6 +298,7 @@ int main(void) {
 
     pthread_t thread_comandos;
     pthread_create(&thread_comandos, NULL, th_comandos, NULL);
+
     while (status) {
         int *pclient = malloc(sizeof(int));
         *pclient = accept(sockfd, NULL, NULL);
@@ -321,10 +313,15 @@ int main(void) {
         pthread_create(&tid, NULL, th_atenderCliente, pclient);
         pthread_detach(tid);
     }
+    
     pthread_join(thread_comandos, NULL);
     salvarRegistros(registros, NUM_REGISTROS);
     eventoLog("Servidor encerrado.");
     fclose(arquivoLog);
     unlink(SOCK_PATH);
+    pthread_mutex_destroy(&mutexFila);
+    pthread_cond_destroy(&condFila);
+    pthread_mutex_destroy(&mutexLog);
+    pthread_mutex_destroy(&mutexBanco);
     return 0;
 }
